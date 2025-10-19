@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx shadcn@latest init)",
+      "Bash(npx shadcn@latest init -y)",
+      "Bash(npm install class-variance-authority clsx tailwind-merge)",
+      "Bash(npx shadcn@latest add button)",
+      "Bash(curl -s https://ui.shadcn.com/llms.txt)",
+      "Bash(npm run dev)"
+    ],
+    "deny": [],
+    "ask": []
+  },
+  "enabledMcpjsonServers": [
+    "shadcn"
+  ]
+}
