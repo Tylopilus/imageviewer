@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ImageGrid } from '@/components/ImageGrid';
 import { ImageLightbox } from '@/components/ImageLightbox';
 import { scanFolder, createThumbnail, checkFileSystemSupport, exportSelectedImages } from '@/utils/fileSystem';
@@ -11,9 +12,9 @@ import {
   updateImageSelection,
   getSessionImages,
   getSession,
+  getAllSessions,
   findSessionByFolderName,
-  exportDatabase,
-  importDatabase
+  saveImagesToDatabase
 } from '@/utils/database';
 
 interface ImageItem {
@@ -42,6 +43,8 @@ function App() {
   const [exportProgress, setExportProgress] = useState({ current: 0, total: 0 });
   const [lightboxImageId, setLightboxImageId] = useState<string | null>(null);
   const [focusedIndex, setFocusedIndex] = useState<number>(0);
+  const [lastSession, setLastSession] = useState<{ id: number; folderName: string } | null>(null);
+  const [showResumeNotification, setShowResumeNotification] = useState(false);
 
   // Initialize database
   useEffect(() => {
@@ -50,6 +53,25 @@ function App() {
         await initDatabase();
         setDbInitialized(true);
         console.log('Database initialized successfully');
+
+        // Check for last session
+        try {
+          const sessions = getAllSessions();
+          console.log('Found sessions:', sessions);
+          if (sessions.length > 0) {
+            const mostRecent = sessions[0]; // Already sorted by last_accessed DESC
+            console.log('Most recent session:', mostRecent);
+            setLastSession({
+              id: mostRecent.id as number,
+              folderName: mostRecent.folderName as string
+            });
+            setShowResumeNotification(true);
+          } else {
+            console.log('No sessions found in database');
+          }
+        } catch (sessionError) {
+          console.error('Failed to get sessions:', sessionError);
+        }
       } catch (error) {
         console.error('Failed to initialize database:', error);
       }
@@ -59,38 +81,7 @@ function App() {
 
   useEffect(() => {
     setIsSupported(checkFileSystemSupport());
-
-    // Load placeholder images for testing
-    const placeholderImages: ImageItem[] = Array.from({ length: 70 }, (_, i) => ({
-      id: `placeholder-${i}`,
-      fileHandle: null as any,
-      fileName: `Image ${i + 1}.jpg`,
-      path: `placeholder-${i}.jpg`,
-      size: 1024000,
-      thumbnailUrl: `https://picsum.photos/seed/${i}/400/400`,
-      lastModified: Date.now(),
-      selected: false,
-    }));
-    setImages(placeholderImages);
-
-    // Create a test session for placeholder images
-    if (dbInitialized) {
-      const sessionId = createSession('Placeholder Images', '5x5');
-      setCurrentSessionId(sessionId);
-
-      // Save placeholder images to database
-      placeholderImages.forEach(img => {
-        saveImage(sessionId, {
-          fileName: img.fileName,
-          filePath: img.path,
-          size: img.size,
-          lastModified: img.lastModified,
-          selected: img.selected,
-          thumbnailData: img.thumbnailUrl,
-        });
-      });
-    }
-  }, [dbInitialized]);
+  }, []);
 
   const imagesPerPage = gridMode === '5x5' ? 25 : 24;
   const totalPages = Math.ceil(images.length / imagesPerPage);
@@ -98,6 +89,16 @@ function App() {
   const endIdx = startIdx + imagesPerPage;
   const currentImages = images.slice(startIdx, endIdx);
   const selectedCount = images.filter((img) => img.selected).length;
+
+  const handleResumeSession = async () => {
+    setShowResumeNotification(false);
+    await handleSelectFolder();
+  };
+
+  const handleDismissNotification = () => {
+    setShowResumeNotification(false);
+    setLastSession(null);
+  };
 
   const handleSelectFolder = async () => {
     if (!isSupported) {
@@ -109,6 +110,7 @@ function App() {
       const dirHandle = await window.showDirectoryPicker({ mode: 'read' });
       setFolderHandle(dirHandle);
       setIsLoading(true);
+      setShowResumeNotification(false); // Hide notification when folder is selected
 
       const folderName = dirHandle.name;
 
@@ -165,6 +167,10 @@ function App() {
               selected: img.selected,
             });
           });
+
+          // Save to localStorage after all images are added
+          saveImagesToDatabase();
+          console.log('Saved', scannedImages.length, 'images to database');
         }
       }
 
@@ -262,55 +268,6 @@ function App() {
 
       return newPage;
     });
-  };
-
-  const handleExportDatabase = () => {
-    if (!dbInitialized) {
-      alert('Database not initialized');
-      return;
-    }
-
-    try {
-      const data = exportDatabase();
-      const blob = new Blob([data], { type: 'application/octet-stream' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `imageviewer-db-${Date.now()}.sqlite`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      console.log('Database exported successfully');
-    } catch (error) {
-      console.error('Failed to export database:', error);
-      alert('Failed to export database');
-    }
-  };
-
-  const handleImportDatabase = async () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.sqlite';
-
-    input.onchange = async (e: Event) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) return;
-
-      try {
-        const arrayBuffer = await file.arrayBuffer();
-        const data = new Uint8Array(arrayBuffer);
-        await importDatabase(data);
-        setDbInitialized(true);
-        console.log('Database imported successfully');
-        alert('Database imported successfully. Please refresh the page.');
-      } catch (error) {
-        console.error('Failed to import database:', error);
-        alert('Failed to import database');
-      }
-    };
-
-    input.click();
   };
 
   const handleExportSelected = async () => {
@@ -465,14 +422,14 @@ function App() {
         case ' ':
           e.preventDefault();
           if (focusedIndex >= 0 && focusedIndex < images.length) {
-            handleSelectImage(images[focusedIndex].id);
+            handleLongPress(images[focusedIndex].id);
           }
           break;
 
         case 'Enter':
           e.preventDefault();
           if (focusedIndex >= 0 && focusedIndex < images.length) {
-            handleLongPress(images[focusedIndex].id);
+            handleSelectImage(images[focusedIndex].id);
           }
           break;
 
@@ -518,6 +475,44 @@ function App() {
 
   return (
     <div className="h-screen bg-gray-100 flex flex-col">
+      {/* Resume Session Notification */}
+      {showResumeNotification && lastSession && (
+        <Alert className="rounded-none border-0 border-b bg-blue-50 text-blue-900 flex-shrink-0">
+          <svg
+            className="w-5 h-5"
+            fill="none"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="2"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <AlertDescription className="flex items-center justify-between w-full">
+            <span>
+              Resume your last session for folder <strong>"{lastSession.folderName}"</strong>?
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="default"
+                size="sm"
+                onClick={handleResumeSession}
+              >
+                Resume
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleDismissNotification}
+              >
+                Dismiss
+              </Button>
+            </div>
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Header */}
       <header className="bg-white shadow-sm border-b flex-shrink-0">
         <div className="max-w-7xl mx-auto px-4 py-4">
@@ -536,21 +531,17 @@ function App() {
                   >
                     {gridMode === '5x5' ? '5×5 Grid' : '6×4 Grid'}
                   </Button>
+                  <Button
+                    onClick={handleExportSelected}
+                    disabled={selectedCount === 0 || isExporting}
+                  >
+                    {isExporting
+                      ? `Exporting... (${exportProgress.current}/${exportProgress.total})`
+                      : `Export Selected (${selectedCount})`
+                    }
+                  </Button>
                 </>
               )}
-              <Button
-                variant="outline"
-                onClick={handleExportDatabase}
-                disabled={!dbInitialized}
-              >
-                Export DB
-              </Button>
-              <Button
-                variant="outline"
-                onClick={handleImportDatabase}
-              >
-                Import DB
-              </Button>
               <Button onClick={handleSelectFolder} disabled={isLoading}>
                 {isLoading ? 'Loading...' : folderHandle ? 'Change Folder' : 'Select Folder'}
               </Button>
@@ -615,19 +606,8 @@ function App() {
                 </Button>
               </div>
 
-              <div className="flex items-center gap-4">
-                <div className="text-sm text-gray-600">
-                  {images.length} images total
-                </div>
-                <Button
-                  onClick={handleExportSelected}
-                  disabled={selectedCount === 0 || isExporting}
-                >
-                  {isExporting
-                    ? `Exporting... (${exportProgress.current}/${exportProgress.total})`
-                    : `Export Selected (${selectedCount})`
-                  }
-                </Button>
+              <div className="text-sm text-gray-600">
+                {images.length} images total
               </div>
             </div>
           </div>

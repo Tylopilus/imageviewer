@@ -1,15 +1,56 @@
 import initSqlJs, { Database } from 'sql.js';
+import { openDB, type IDBPDatabase } from 'idb';
 
 let db: Database | null = null;
+let idbConnection: IDBPDatabase | null = null;
+
+const DB_NAME = 'imageviewer-db';
+const DB_VERSION = 1;
+const STORE_NAME = 'database';
+
+async function getIDB(): Promise<IDBPDatabase> {
+  if (idbConnection) return idbConnection;
+
+  idbConnection = await openDB(DB_NAME, DB_VERSION, {
+    upgrade(db) {
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME);
+      }
+    },
+  });
+
+  return idbConnection;
+}
 
 export async function initDatabase(): Promise<Database> {
-  if (db) return db;
+  if (db) {
+    console.log('Database already initialized, reusing existing instance');
+    return db;
+  }
 
+  console.log('Initializing sql.js...');
   const SQL = await initSqlJs({
     locateFile: (file) => `https://sql.js.org/dist/${file}`
   });
 
-  db = new SQL.Database();
+  // Try to load existing database from IndexedDB
+  try {
+    const idb = await getIDB();
+    const savedData = await idb.get(STORE_NAME, 'sqliteDb');
+
+    if (savedData) {
+      console.log('Loading existing database from IndexedDB');
+      const uint8Array = new Uint8Array(savedData);
+      db = new SQL.Database(uint8Array);
+      console.log('Database loaded successfully from IndexedDB');
+    } else {
+      console.log('No existing database found, creating new one');
+      db = new SQL.Database();
+    }
+  } catch (error) {
+    console.error('Failed to load database from IndexedDB:', error);
+    db = new SQL.Database();
+  }
 
   // Create tables
   db.run(`
@@ -37,7 +78,25 @@ export async function initDatabase(): Promise<Database> {
     )
   `);
 
+  console.log('Database tables created/verified');
+
+  // Save database to IndexedDB after initialization
+  await saveToIndexedDB();
+
   return db;
+}
+
+async function saveToIndexedDB(): Promise<void> {
+  if (!db) return;
+
+  try {
+    const data = db.export();
+    const idb = await getIDB();
+    await idb.put(STORE_NAME, data, 'sqliteDb');
+    console.log('Database saved to IndexedDB');
+  } catch (error) {
+    console.error('Failed to save database to IndexedDB:', error);
+  }
 }
 
 export function getDatabase(): Database {
@@ -59,21 +118,28 @@ export function createSession(folderName: string, gridMode: string = '5x5'): num
   const db = getDatabase();
   const now = Date.now();
 
+  console.log('Creating session for folder:', folderName);
   db.run(
     'INSERT INTO sessions (folder_name, created_at, last_accessed, grid_mode) VALUES (?, ?, ?, ?)',
     [folderName, now, now, gridMode]
   );
 
   const result = db.exec('SELECT last_insert_rowid() as id');
-  return result[0].values[0][0] as number;
+  const sessionId = result[0].values[0][0] as number;
+  console.log('Session created with ID:', sessionId);
+
+  saveToIndexedDB(); // Fire and forget
+  return sessionId;
 }
 
 export function updateSession(sessionId: number, gridMode: string, currentPage: number): void {
   const db = getDatabase();
+  console.log('Updating session:', sessionId, 'gridMode:', gridMode, 'page:', currentPage);
   db.run(
     'UPDATE sessions SET grid_mode = ?, current_page = ?, last_accessed = ? WHERE id = ?',
     [gridMode, currentPage, Date.now(), sessionId]
   );
+  saveToIndexedDB(); // Fire and forget
 }
 
 export function getSession(sessionId: number) {
@@ -140,14 +206,21 @@ export function saveImage(sessionId: number, image: {
     'INSERT INTO images (session_id, file_name, file_path, size, last_modified, selected, thumbnail_data) VALUES (?, ?, ?, ?, ?, ?, ?)',
     [sessionId, image.fileName, image.filePath, image.size, image.lastModified, image.selected ? 1 : 0, image.thumbnailData || null]
   );
+  // Note: We'll batch save after all images are added, not per image
 }
 
 export function updateImageSelection(sessionId: number, filePath: string, selected: boolean): void {
   const db = getDatabase();
+  console.log('Updating image selection:', filePath, 'selected:', selected);
   db.run(
     'UPDATE images SET selected = ? WHERE session_id = ? AND file_path = ?',
     [selected ? 1 : 0, sessionId, filePath]
   );
+  saveToIndexedDB(); // Fire and forget
+}
+
+export function saveImagesToDatabase(): void {
+  saveToIndexedDB(); // Fire and forget
 }
 
 export function getSessionImages(sessionId: number) {
