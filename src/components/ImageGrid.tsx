@@ -11,7 +11,7 @@ interface ImageItem {
   selected: boolean;
 }
 
-type GridMode = '5x5' | '6x4';
+type GridMode = '4x4' | '5x5' | '6x4';
 
 interface ImageGridProps {
   images: ImageItem[];
@@ -24,8 +24,8 @@ interface ImageGridProps {
 }
 
 export function ImageGrid({ images, gridMode, onSelectImage, onLongPressImage, focusedIndex, pageStartIndex, onThumbnailLoad }: ImageGridProps) {
-  const gridCols = gridMode === '5x5' ? 'grid-cols-5' : 'grid-cols-6';
-  const gridRows = gridMode === '5x5' ? 'grid-rows-5' : 'grid-rows-4';
+  const gridCols = gridMode === '4x4' ? 'grid-cols-4' : gridMode === '5x5' ? 'grid-cols-5' : 'grid-cols-6';
+  const gridRows = gridMode === '4x4' ? 'grid-rows-4' : gridMode === '5x5' ? 'grid-rows-5' : 'grid-rows-4';
 
   return (
     <div className={`grid ${gridCols} ${gridRows} gap-4 p-4 h-full`}>

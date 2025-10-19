@@ -317,3 +317,28 @@ export async function importDatabase(data: Uint8Array): Promise<void> {
 
   db = new SQL.Database(data);
 }
+
+// Reset/Clear database
+export async function resetDatabase(): Promise<void> {
+  try {
+    // Close current database
+    if (db) {
+      db.close();
+      db = null;
+    }
+
+    // Clear IndexedDB
+    const idb = await getIDB();
+    await idb.delete(STORE_NAME, 'sqliteDb');
+
+    console.log('Database cleared from IndexedDB');
+
+    // Reinitialize with fresh database
+    await initDatabase();
+
+    console.log('Database reset successfully');
+  } catch (error) {
+    console.error('Failed to reset database:', error);
+    throw error;
+  }
+}

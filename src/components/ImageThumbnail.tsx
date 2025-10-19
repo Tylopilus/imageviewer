@@ -94,7 +94,7 @@ export function ImageThumbnail({ image, onSelect, onLongPress, isFocused = false
         <img
           src={image.thumbnailUrl}
           alt={image.fileName}
-          className="w-full h-full object-cover"
+          className="w-full h-full object-contain"
           onLoad={() => onLoad?.(image.id)}
         />
       ) : (
@@ -119,7 +119,7 @@ export function ImageThumbnail({ image, onSelect, onLongPress, isFocused = false
         </div>
       )}
 
-      <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 text-white text-xs p-1 truncate">
+      <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-30 text-white text-xs p-0.5 truncate opacity-0 hover:opacity-100 transition-opacity">
         {image.fileName}
       </div>
     </div>

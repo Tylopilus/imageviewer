@@ -3,6 +3,16 @@ import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ImageGrid } from '@/components/ImageGrid';
 import { ImageLightbox } from '@/components/ImageLightbox';
+import {
+  Command,
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandSeparator,
+} from '@/components/ui/command';
 import { scanFolder, createThumbnail, checkFileSystemSupport, exportSelectedImages } from '@/utils/fileSystem';
 import {
   initDatabase,
@@ -30,7 +40,7 @@ interface ImageItem {
   selected: boolean;
 }
 
-type GridMode = '5x5' | '6x4';
+type GridMode = '4x4' | '5x5' | '6x4';
 
 function App() {
   const [images, setImages] = useState<ImageItem[]>([]);
@@ -47,6 +57,8 @@ function App() {
   const [focusedIndex, setFocusedIndex] = useState<number>(0);
   const [lastSession, setLastSession] = useState<{ id: number; folderName: string } | null>(null);
   const [showResumeNotification, setShowResumeNotification] = useState(false);
+  const [showHeader, setShowHeader] = useState(true);
+  const [showCommandMenu, setShowCommandMenu] = useState(false);
 
   // Initialize database
   useEffect(() => {
@@ -85,7 +97,7 @@ function App() {
     setIsSupported(checkFileSystemSupport());
   }, []);
 
-  const imagesPerPage = gridMode === '5x5' ? 25 : 24;
+  const imagesPerPage = gridMode === '4x4' ? 16 : gridMode === '5x5' ? 25 : 24;
   const totalPages = Math.ceil(images.length / imagesPerPage);
   const startIdx = currentPage * imagesPerPage;
   const endIdx = startIdx + imagesPerPage;
@@ -216,7 +228,8 @@ function App() {
 
   const handleToggleGridMode = () => {
     setGridMode((prev) => {
-      const newMode = prev === '5x5' ? '6x4' : '5x5';
+      // Cycle through: 4x4 -> 5x5 -> 6x4 -> 4x4
+      const newMode = prev === '4x4' ? '5x5' : prev === '5x5' ? '6x4' : '4x4';
 
       // Update database session
       if (currentSessionId && dbInitialized) {
@@ -371,10 +384,18 @@ function App() {
     // Update focused index to match the lightbox navigation
     setFocusedIndex(newIndex);
 
-    // Update database with new focused index
+    // Calculate which page the new focused image is on
+    const newPage = Math.floor(newIndex / imagesPerPage);
+
+    // Update page if needed
+    if (newPage !== currentPage) {
+      setCurrentPage(newPage);
+    }
+
+    // Update database with new focused index and page
     if (currentSessionId && dbInitialized) {
       try {
-        updateSession(currentSessionId, gridMode, currentPage, newIndex);
+        updateSession(currentSessionId, gridMode, newPage, newIndex);
       } catch (error) {
         console.error('Failed to update focused index in database:', error);
       }
@@ -401,8 +422,8 @@ function App() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (images.length === 0) return;
 
-      const cols = gridMode === '5x5' ? 5 : 6;
-      const rows = gridMode === '5x5' ? 5 : 4;
+      const cols = gridMode === '4x4' ? 4 : gridMode === '5x5' ? 5 : 6;
+      const rows = gridMode === '4x4' ? 4 : gridMode === '5x5' ? 5 : 4;
       const imagesPerPage = cols * rows;
 
       // Calculate position in current page grid
@@ -624,6 +645,50 @@ function App() {
     );
   }, [currentPage, images.length, imagesPerPage]);
 
+  // Auto-hide/show header based on mouse position
+  useEffect(() => {
+    let hideTimer: NodeJS.Timeout;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      // Show header if mouse is in top 100px of screen
+      if (e.clientY < 100) {
+        setShowHeader(true);
+        clearTimeout(hideTimer);
+      } else {
+        // Hide header after 2 seconds of mouse being away from top
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(() => {
+          setShowHeader(false);
+        }, 2000);
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+
+    // Initially hide after 3 seconds
+    hideTimer = setTimeout(() => {
+      setShowHeader(false);
+    }, 3000);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      clearTimeout(hideTimer);
+    };
+  }, []);
+
+  // Command menu keyboard shortcut
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setShowCommandMenu((prev) => !prev);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   if (!isSupported) {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
@@ -686,10 +751,14 @@ function App() {
       )}
 
       {/* Header */}
-      <header className="bg-white shadow-sm border-b flex-shrink-0">
-        <div className="max-w-7xl mx-auto px-4 py-4">
+      <header
+        className={`fixed top-0 left-0 right-0 bg-white shadow-lg border-b z-40 transition-transform duration-300 ${
+          showHeader ? 'translate-y-0' : '-translate-y-full'
+        }`}
+      >
+        <div className="max-w-7xl mx-auto px-4 py-2">
           <div className="flex items-center justify-between">
-            <h1 className="text-2xl font-bold text-gray-900">Image Viewer</h1>
+            <h1 className="text-xl font-bold text-gray-900">Image Viewer</h1>
 
             <div className="flex items-center gap-4">
               {images.length > 0 && (
@@ -697,7 +766,7 @@ function App() {
                   variant="outline"
                   onClick={handleToggleGridMode}
                 >
-                  {gridMode === '5x5' ? '5×5 Grid' : '6×4 Grid'}
+                  {gridMode === '4x4' ? '4×4 Grid' : gridMode === '5x5' ? '5×5 Grid' : '6×4 Grid'}
                 </Button>
               )}
               <Button variant="secondary" onClick={handleSelectFolder} disabled={isLoading}>
@@ -720,7 +789,7 @@ function App() {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-y-auto">
+      <main className="flex-1 overflow-y-auto pt-0">
         <div className="max-w-7xl mx-auto h-full">
           {images.length === 0 ? (
             <div className="flex items-center justify-center h-full">
@@ -756,7 +825,7 @@ function App() {
       {/* Footer */}
       {images.length > 0 && (
         <footer className="bg-white border-t flex-shrink-0">
-          <div className="max-w-7xl mx-auto px-4 py-4">
+          <div className="max-w-7xl mx-auto px-4 py-2">
             <div className="flex items-center justify-between">
               <div className="flex gap-2">
                 <Button
@@ -782,6 +851,98 @@ function App() {
           </div>
         </footer>
       )}
+
+      {/* Command Menu */}
+      <CommandDialog open={showCommandMenu} onOpenChange={setShowCommandMenu}>
+        <CommandInput placeholder="Type a command or search..." />
+        <CommandList>
+          <CommandEmpty>No results found.</CommandEmpty>
+
+          <CommandGroup heading="Navigation">
+            <CommandItem
+              onSelect={() => {
+                if (currentPage > 0) handlePreviousPage();
+                setShowCommandMenu(false);
+              }}
+              disabled={currentPage === 0}
+            >
+              <span>Previous Page</span>
+            </CommandItem>
+            <CommandItem
+              onSelect={() => {
+                if (currentPage < totalPages - 1) handleNextPage();
+                setShowCommandMenu(false);
+              }}
+              disabled={currentPage === totalPages - 1}
+            >
+              <span>Next Page</span>
+            </CommandItem>
+          </CommandGroup>
+
+          <CommandSeparator />
+
+          <CommandGroup heading="Grid View">
+            <CommandItem
+              onSelect={() => {
+                handleToggleGridMode();
+                setShowCommandMenu(false);
+              }}
+            >
+              <span>Toggle Grid Mode (Current: {gridMode})</span>
+            </CommandItem>
+          </CommandGroup>
+
+          <CommandSeparator />
+
+          <CommandGroup heading="Folder">
+            <CommandItem
+              onSelect={() => {
+                handleSelectFolder();
+                setShowCommandMenu(false);
+              }}
+            >
+              <span>{folderHandle ? 'Change Folder' : 'Select Folder'}</span>
+            </CommandItem>
+            {lastSession && (
+              <CommandItem
+                onSelect={() => {
+                  handleResumeSession();
+                  setShowCommandMenu(false);
+                }}
+              >
+                <span>Resume Last Session ({lastSession.folderName})</span>
+              </CommandItem>
+            )}
+          </CommandGroup>
+
+          <CommandSeparator />
+
+          <CommandGroup heading="Selection">
+            <CommandItem
+              onSelect={() => {
+                handleExportSelected();
+                setShowCommandMenu(false);
+              }}
+              disabled={selectedCount === 0 || isExporting}
+            >
+              <span>Export Selected Images ({selectedCount})</span>
+            </CommandItem>
+          </CommandGroup>
+
+          <CommandSeparator />
+
+          <CommandGroup heading="View">
+            <CommandItem
+              onSelect={() => {
+                setShowHeader((prev) => !prev);
+                setShowCommandMenu(false);
+              }}
+            >
+              <span>{showHeader ? 'Hide Header' : 'Show Header'}</span>
+            </CommandItem>
+          </CommandGroup>
+        </CommandList>
+      </CommandDialog>
     </div>
   );
 }

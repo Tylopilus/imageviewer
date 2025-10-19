@@ -49,11 +49,8 @@ export async function createThumbnail(
     // Use createImageBitmap for faster decoding (hardware accelerated)
     const url = URL.createObjectURL(file);
 
-    createImageBitmap(file, {
-      resizeWidth: maxSize,
-      resizeHeight: maxSize,
-      resizeQuality: 'low' // Fast, pixelated scaling - fine for thumbnails
-    }).then((imageBitmap) => {
+    // Load without resizing to preserve aspect ratio
+    createImageBitmap(file).then((imageBitmap) => {
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d', {
         alpha: false, // Disable alpha channel for JPEG - faster
@@ -62,14 +59,15 @@ export async function createThumbnail(
 
       if (!ctx) {
         URL.revokeObjectURL(url);
+        imageBitmap.close();
         reject(new Error('Could not get canvas context'));
         return;
       }
 
       // Calculate aspect-preserving dimensions
       const scale = Math.min(maxSize / imageBitmap.width, maxSize / imageBitmap.height);
-      canvas.width = imageBitmap.width * scale;
-      canvas.height = imageBitmap.height * scale;
+      canvas.width = Math.round(imageBitmap.width * scale);
+      canvas.height = Math.round(imageBitmap.height * scale);
 
       // Disable image smoothing for faster rendering
       ctx.imageSmoothingEnabled = false;
