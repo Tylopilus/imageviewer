@@ -60,7 +60,8 @@ export async function initDatabase(): Promise<Database> {
       created_at INTEGER NOT NULL,
       last_accessed INTEGER NOT NULL,
       grid_mode TEXT DEFAULT '5x5',
-      current_page INTEGER DEFAULT 0
+      current_page INTEGER DEFAULT 0,
+      focused_index INTEGER DEFAULT 0
     )
   `);
 
@@ -79,6 +80,20 @@ export async function initDatabase(): Promise<Database> {
   `);
 
   console.log('Database tables created/verified');
+
+  // Migration: Add focused_index column if it doesn't exist
+  try {
+    const tableInfo = db.exec("PRAGMA table_info(sessions)");
+    const columns = tableInfo[0]?.values.map(row => row[1]) || [];
+
+    if (!columns.includes('focused_index')) {
+      console.log('Adding focused_index column to sessions table');
+      db.run('ALTER TABLE sessions ADD COLUMN focused_index INTEGER DEFAULT 0');
+      console.log('Migration completed: focused_index column added');
+    }
+  } catch (error) {
+    console.error('Migration error:', error);
+  }
 
   // Save database to IndexedDB after initialization
   await saveToIndexedDB();
@@ -132,13 +147,21 @@ export function createSession(folderName: string, gridMode: string = '5x5'): num
   return sessionId;
 }
 
-export function updateSession(sessionId: number, gridMode: string, currentPage: number): void {
+export function updateSession(sessionId: number, gridMode: string, currentPage: number, focusedIndex?: number): void {
   const db = getDatabase();
-  console.log('Updating session:', sessionId, 'gridMode:', gridMode, 'page:', currentPage);
-  db.run(
-    'UPDATE sessions SET grid_mode = ?, current_page = ?, last_accessed = ? WHERE id = ?',
-    [gridMode, currentPage, Date.now(), sessionId]
-  );
+  console.log('Updating session:', sessionId, 'gridMode:', gridMode, 'page:', currentPage, 'focusedIndex:', focusedIndex);
+
+  if (focusedIndex !== undefined) {
+    db.run(
+      'UPDATE sessions SET grid_mode = ?, current_page = ?, focused_index = ?, last_accessed = ? WHERE id = ?',
+      [gridMode, currentPage, focusedIndex, Date.now(), sessionId]
+    );
+  } else {
+    db.run(
+      'UPDATE sessions SET grid_mode = ?, current_page = ?, last_accessed = ? WHERE id = ?',
+      [gridMode, currentPage, Date.now(), sessionId]
+    );
+  }
   saveToIndexedDB(); // Fire and forget
 }
 
@@ -156,6 +179,7 @@ export function getSession(sessionId: number) {
     lastAccessed: row[3],
     gridMode: row[4],
     currentPage: row[5],
+    focusedIndex: row[6],
   };
 }
 
@@ -172,6 +196,7 @@ export function getAllSessions() {
     lastAccessed: row[3],
     gridMode: row[4],
     currentPage: row[5],
+    focusedIndex: row[6],
   }));
 }
 
@@ -189,6 +214,7 @@ export function findSessionByFolderName(folderName: string) {
     lastAccessed: row[3],
     gridMode: row[4],
     currentPage: row[5],
+    focusedIndex: row[6],
   };
 }
 
@@ -207,6 +233,15 @@ export function saveImage(sessionId: number, image: {
     [sessionId, image.fileName, image.filePath, image.size, image.lastModified, image.selected ? 1 : 0, image.thumbnailData || null]
   );
   // Note: We'll batch save after all images are added, not per image
+}
+
+export function updateImageThumbnail(sessionId: number, filePath: string, thumbnailData: string): void {
+  const db = getDatabase();
+  db.run(
+    'UPDATE images SET thumbnail_data = ? WHERE session_id = ? AND file_path = ?',
+    [thumbnailData, sessionId, filePath]
+  );
+  // Don't save to IndexedDB immediately for performance - will be saved in batch
 }
 
 export function updateImageSelection(sessionId: number, filePath: string, selected: boolean): void {

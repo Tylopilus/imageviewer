@@ -41,35 +41,53 @@ export async function scanFolder(
 
 export async function createThumbnail(
   fileHandle: FileSystemFileHandle,
-  maxSize: number = 400
+  maxSize: number = 200 // Reduced from 400 to 200 for faster generation
 ): Promise<string> {
   const file = await fileHandle.getFile();
 
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
+    // Use createImageBitmap for faster decoding (hardware accelerated)
+    const url = URL.createObjectURL(file);
 
-        if (!ctx) {
-          reject(new Error('Could not get canvas context'));
-          return;
-        }
+    createImageBitmap(file, {
+      resizeWidth: maxSize,
+      resizeHeight: maxSize,
+      resizeQuality: 'low' // Fast, pixelated scaling - fine for thumbnails
+    }).then((imageBitmap) => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d', {
+        alpha: false, // Disable alpha channel for JPEG - faster
+        willReadFrequently: false
+      });
 
-        const scale = Math.min(maxSize / img.width, maxSize / img.height);
-        canvas.width = img.width * scale;
-        canvas.height = img.height * scale;
+      if (!ctx) {
+        URL.revokeObjectURL(url);
+        reject(new Error('Could not get canvas context'));
+        return;
+      }
 
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/jpeg', 0.7));
-      };
-      img.onerror = () => reject(new Error('Failed to load image'));
-      img.src = e.target?.result as string;
-    };
-    reader.onerror = () => reject(new Error('Failed to read file'));
-    reader.readAsDataURL(file);
+      // Calculate aspect-preserving dimensions
+      const scale = Math.min(maxSize / imageBitmap.width, maxSize / imageBitmap.height);
+      canvas.width = imageBitmap.width * scale;
+      canvas.height = imageBitmap.height * scale;
+
+      // Disable image smoothing for faster rendering
+      ctx.imageSmoothingEnabled = false;
+
+      ctx.drawImage(imageBitmap, 0, 0, canvas.width, canvas.height);
+
+      // Lower quality for smaller file size and faster encoding
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.5);
+
+      // Cleanup
+      imageBitmap.close();
+      URL.revokeObjectURL(url);
+
+      resolve(dataUrl);
+    }).catch((error) => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Failed to create thumbnail: ' + error.message));
+    });
   });
 }
 

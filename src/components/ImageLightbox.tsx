@@ -9,6 +9,7 @@ interface ImageItem {
   path: string;
   size: number;
   thumbnailUrl?: string;
+  fullResUrl?: string;
   lastModified: number;
   selected: boolean;
 }
@@ -21,35 +22,14 @@ interface ImageLightboxProps {
 }
 
 export function ImageLightbox({ image, allImages, onClose, onNavigate }: ImageLightboxProps) {
-  const [fullResUrl, setFullResUrl] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
   const currentIndex = allImages.findIndex(img => img.id === image.id);
   const hasPrevious = currentIndex > 0;
   const hasNext = currentIndex < allImages.length - 1;
 
-  useEffect(() => {
-    const loadFullResolution = async () => {
-      try {
-        setIsLoading(true);
-        const file = await image.fileHandle.getFile();
-        const url = URL.createObjectURL(file);
-        setFullResUrl(url);
-      } catch (error) {
-        console.error('Failed to load full resolution image:', error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    loadFullResolution();
-
-    return () => {
-      if (fullResUrl) {
-        URL.revokeObjectURL(fullResUrl);
-      }
-    };
-  }, [image]);
+  // Use cached fullResUrl if available, fallback to thumbnail for instant display
+  const displayUrl = image.fullResUrl || image.thumbnailUrl;
+  const isLoading = !displayUrl;
+  const isFullRes = !!image.fullResUrl;
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -68,15 +48,15 @@ export function ImageLightbox({ image, allImages, onClose, onNavigate }: ImageLi
 
   return (
     <Dialog open={true} onOpenChange={onClose}>
-      <DialogOverlay className="bg-black/95" />
+      <DialogOverlay className="bg-black/98" />
       <DialogContent
-        className="max-w-[95vw] w-fit h-[95vh] p-0 border-0 bg-transparent shadow-none"
+        className="max-w-full w-screen h-screen p-0 m-0 border-0 bg-transparent shadow-none rounded-none"
         showCloseButton={false}
       >
         {/* Close button */}
         <Button
           variant="ghost"
-          className="absolute top-4 right-4 text-white hover:bg-white hover:bg-opacity-20 z-10"
+          className="absolute top-2 right-2 text-white hover:bg-white hover:bg-opacity-20 z-10 h-10 w-10 p-0"
           onClick={onClose}
         >
           <svg
@@ -96,14 +76,14 @@ export function ImageLightbox({ image, allImages, onClose, onNavigate }: ImageLi
         {hasPrevious && (
           <Button
             variant="ghost"
-            className="absolute left-4 top-1/2 -translate-y-1/2 text-white hover:bg-white hover:bg-opacity-20 z-10 h-16 w-16"
+            className="absolute left-2 top-1/2 -translate-y-1/2 text-white hover:bg-white hover:bg-opacity-20 z-10 h-20 w-12"
             onClick={(e) => {
               e.stopPropagation();
               onNavigate('prev');
             }}
           >
             <svg
-              className="w-8 h-8"
+              className="w-10 h-10"
               fill="none"
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -120,14 +100,14 @@ export function ImageLightbox({ image, allImages, onClose, onNavigate }: ImageLi
         {hasNext && (
           <Button
             variant="ghost"
-            className="absolute right-4 top-1/2 -translate-y-1/2 text-white hover:bg-white hover:bg-opacity-20 z-10 h-16 w-16"
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-white hover:bg-white hover:bg-opacity-20 z-10 h-20 w-12"
             onClick={(e) => {
               e.stopPropagation();
               onNavigate('next');
             }}
           >
             <svg
-              className="w-8 h-8"
+              className="w-10 h-10"
               fill="none"
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -141,17 +121,25 @@ export function ImageLightbox({ image, allImages, onClose, onNavigate }: ImageLi
         )}
 
         {/* Image container */}
-        <div className="w-full h-full flex items-center justify-center">
+        <div className="absolute inset-0 flex items-center justify-center">
           {isLoading ? (
             <div className="flex items-center justify-center">
               <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-white"></div>
             </div>
-          ) : fullResUrl ? (
-            <img
-              src={fullResUrl}
-              alt={image.fileName}
-              className="max-w-full max-h-full object-contain"
-            />
+          ) : displayUrl ? (
+            <div className="relative w-full h-full flex items-center justify-center">
+              <img
+                src={displayUrl}
+                alt={image.fileName}
+                className="object-contain"
+                style={{ maxWidth: '90vw', height: '80vh' }}
+              />
+              {!isFullRes && (
+                <div className="absolute top-6 left-6 bg-black bg-opacity-50 px-3 py-1 rounded text-white text-xs">
+                  Loading full resolution...
+                </div>
+              )}
+            </div>
           ) : (
             <div className="text-white text-center">
               <p>Failed to load image</p>
@@ -161,10 +149,10 @@ export function ImageLightbox({ image, allImages, onClose, onNavigate }: ImageLi
         </div>
 
         {/* Image info */}
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-white text-center bg-black bg-opacity-50 px-4 py-2 rounded-lg">
-          <p className="text-sm font-medium">{image.fileName}</p>
-          <p className="text-xs text-gray-300 mt-1">
-            {currentIndex + 1} of {allImages.length}
+        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 text-white text-center bg-black bg-opacity-60 px-3 py-1.5 rounded">
+          <p className="text-xs font-medium">{image.fileName}</p>
+          <p className="text-xs text-gray-300">
+            {currentIndex + 1} / {allImages.length}
           </p>
         </div>
       </DialogContent>

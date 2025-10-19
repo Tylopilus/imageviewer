@@ -10,6 +10,7 @@ import {
   updateSession,
   saveImage,
   updateImageSelection,
+  updateImageThumbnail,
   getSessionImages,
   getSession,
   getAllSessions,
@@ -24,6 +25,7 @@ interface ImageItem {
   path: string;
   size: number;
   thumbnailUrl?: string;
+  fullResUrl?: string;
   lastModified: number;
   selected: boolean;
 }
@@ -127,27 +129,35 @@ function App() {
       if (existingSession && dbInitialized) {
         // Restore existing session
         console.log('Restoring existing session:', existingSession);
+        console.log('Restoring focusedIndex:', existingSession.focusedIndex);
         sessionId = existingSession.id as number;
         setCurrentSessionId(sessionId);
         setGridMode(existingSession.gridMode as GridMode);
         setCurrentPage(existingSession.currentPage as number);
+        const restoredFocusedIndex = existingSession.focusedIndex as number || 0;
+        console.log('Setting focusedIndex to:', restoredFocusedIndex);
+        setFocusedIndex(restoredFocusedIndex);
 
-        // Load saved selections from database
+        // Load saved selections and thumbnails from database
         const savedImages = getSessionImages(sessionId);
-        const savedSelectionsMap = new Map(
-          savedImages.map(img => [img.filePath, img.selected])
+        const savedDataMap = new Map(
+          savedImages.map(img => [img.filePath, { selected: img.selected, thumbnailData: img.thumbnailData }])
         );
 
-        // Merge scanned images with saved selections
-        const mergedImages = scannedImages.map(img => ({
-          ...img,
-          selected: savedSelectionsMap.get(img.path) || false
-        }));
+        // Merge scanned images with saved selections and thumbnails
+        const mergedImages = scannedImages.map(img => {
+          const savedData = savedDataMap.get(img.path);
+          return {
+            ...img,
+            selected: savedData?.selected || false,
+            thumbnailUrl: savedData?.thumbnailData || undefined
+          };
+        });
 
         setImages(mergedImages);
 
         // Update session last accessed
-        updateSession(sessionId, existingSession.gridMode as string, existingSession.currentPage as number);
+        updateSession(sessionId, existingSession.gridMode as string, existingSession.currentPage as number, existingSession.focusedIndex as number);
       } else {
         // Create new session
         setImages(scannedImages);
@@ -173,20 +183,6 @@ function App() {
           console.log('Saved', scannedImages.length, 'images to database');
         }
       }
-
-      // Generate thumbnails in the background
-      scannedImages.forEach(async (img, index) => {
-        try {
-          const thumbnailUrl = await createThumbnail(img.fileHandle);
-          setImages((prev) =>
-            prev.map((item) =>
-              item.id === img.id ? { ...item, thumbnailUrl } : item
-            )
-          );
-        } catch (error) {
-          console.error(`Failed to create thumbnail for ${img.fileName}:`, error);
-        }
-      });
 
       setIsLoading(false);
     } catch (error) {
@@ -314,24 +310,85 @@ function App() {
     }
   };
 
-  const handleLongPress = (id: string) => {
+  // Load full-resolution image and cache it
+  const loadFullResImage = async (imageId: string) => {
+    const image = images.find(img => img.id === imageId);
+    if (!image) return;
+
+    // If already loaded, return immediately
+    if (image.fullResUrl) return;
+
+    try {
+      const file = await image.fileHandle.getFile();
+      const url = URL.createObjectURL(file);
+
+      // Update state with cached URL
+      setImages((prev) =>
+        prev.map((item) =>
+          item.id === imageId ? { ...item, fullResUrl: url } : item
+        )
+      );
+    } catch (error) {
+      console.error('Failed to load full resolution image:', error);
+    }
+  };
+
+  const handleLongPress = async (id: string) => {
     setLightboxImageId(id);
+
+    // Load current image
+    await loadFullResImage(id);
+
+    // Preload adjacent images for faster navigation
+    const currentIndex = images.findIndex(img => img.id === id);
+    if (currentIndex > 0) {
+      loadFullResImage(images[currentIndex - 1].id);
+    }
+    if (currentIndex < images.length - 1) {
+      loadFullResImage(images[currentIndex + 1].id);
+    }
   };
 
   const handleCloseLightbox = () => {
     setLightboxImageId(null);
   };
 
-  const handleNavigateLightbox = (direction: 'prev' | 'next') => {
+  const handleNavigateLightbox = async (direction: 'prev' | 'next') => {
     if (!lightboxImageId) return;
 
     const currentIndex = images.findIndex(img => img.id === lightboxImageId);
     if (currentIndex === -1) return;
 
+    let newIndex = currentIndex;
     if (direction === 'prev' && currentIndex > 0) {
-      setLightboxImageId(images[currentIndex - 1].id);
+      newIndex = currentIndex - 1;
+      setLightboxImageId(images[newIndex].id);
     } else if (direction === 'next' && currentIndex < images.length - 1) {
-      setLightboxImageId(images[currentIndex + 1].id);
+      newIndex = currentIndex + 1;
+      setLightboxImageId(images[newIndex].id);
+    }
+
+    // Update focused index to match the lightbox navigation
+    setFocusedIndex(newIndex);
+
+    // Update database with new focused index
+    if (currentSessionId && dbInitialized) {
+      try {
+        updateSession(currentSessionId, gridMode, currentPage, newIndex);
+      } catch (error) {
+        console.error('Failed to update focused index in database:', error);
+      }
+    }
+
+    // Load the new image
+    await loadFullResImage(images[newIndex].id);
+
+    // Preload adjacent images
+    if (newIndex > 0) {
+      loadFullResImage(images[newIndex - 1].id);
+    }
+    if (newIndex < images.length - 1) {
+      loadFullResImage(images[newIndex + 1].id);
     }
   };
 
@@ -440,17 +497,132 @@ function App() {
       // Ensure new index is valid
       if (newIndex >= 0 && newIndex < images.length) {
         setFocusedIndex(newIndex);
+
+        // Update database with new focused index
+        if (currentSessionId && dbInitialized && newIndex !== focusedIndex) {
+          try {
+            updateSession(currentSessionId, gridMode, currentPage, newIndex);
+          } catch (error) {
+            console.error('Failed to update focused index in database:', error);
+          }
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [focusedIndex, images, currentPage, totalPages, gridMode, startIdx, endIdx, lightboxImageId]);
+  }, [focusedIndex, images, currentPage, totalPages, gridMode, startIdx, endIdx, lightboxImageId, currentSessionId, dbInitialized]);
 
-  // Reset focused index when changing pages or folders
+  // Initialize focused index when first loading (but not when restoring session)
   useEffect(() => {
-    setFocusedIndex(startIdx);
-  }, [currentPage, folderHandle]);
+    if (images.length > 0 && focusedIndex === 0 && !currentSessionId) {
+      setFocusedIndex(startIdx);
+    }
+  }, [images.length]);
+
+  // Generate thumbnails for current page and adjacent pages (performance optimization)
+  useEffect(() => {
+    if (images.length === 0 || !currentSessionId) return;
+
+    // Process thumbnails in parallel with concurrency limit
+    const generateThumbnailsForPage = async (pageIndex: number, priority: number = 0) => {
+      const pageStartIdx = pageIndex * imagesPerPage;
+      const pageEndIdx = Math.min(pageStartIdx + imagesPerPage, images.length);
+      const pageImages = images.slice(pageStartIdx, pageEndIdx);
+
+      // Filter images that need thumbnails
+      const imagesNeedingThumbnails = pageImages.filter(img => !img.thumbnailUrl);
+
+      if (imagesNeedingThumbnails.length === 0) return;
+
+      // Process in batches of 4 for parallel processing
+      const concurrency = 4;
+      for (let i = 0; i < imagesNeedingThumbnails.length; i += concurrency) {
+        const batch = imagesNeedingThumbnails.slice(i, i + concurrency);
+
+        await Promise.all(
+          batch.map(async (img) => {
+            try {
+              const thumbnailUrl = await createThumbnail(img.fileHandle);
+
+              // Update in-memory state
+              setImages((prev) =>
+                prev.map((item) =>
+                  item.id === img.id ? { ...item, thumbnailUrl } : item
+                )
+              );
+
+              // Save thumbnail to database
+              if (currentSessionId && dbInitialized) {
+                updateImageThumbnail(currentSessionId, img.path, thumbnailUrl);
+              }
+            } catch (error) {
+              console.error(`Failed to create thumbnail for ${img.fileName}:`, error);
+            }
+          })
+        );
+      }
+    };
+
+    // Generate for current page with highest priority
+    generateThumbnailsForPage(currentPage, 0);
+
+    // Generate for adjacent pages in background (prev and next)
+    if (currentPage > 0) {
+      setTimeout(() => generateThumbnailsForPage(currentPage - 1, 1), 500);
+    }
+    if (currentPage < totalPages - 1) {
+      setTimeout(() => generateThumbnailsForPage(currentPage + 1, 1), 1000);
+    }
+
+    // Save thumbnails to IndexedDB after generation (debounced)
+    const saveTimer = setTimeout(() => {
+      if (dbInitialized) {
+        saveImagesToDatabase();
+      }
+    }, 3000);
+
+    return () => clearTimeout(saveTimer);
+  }, [currentPage, images.length, currentSessionId, dbInitialized]);
+
+  // Cleanup blob URLs when they're no longer needed
+  useEffect(() => {
+    return () => {
+      // Revoke all blob URLs on unmount to prevent memory leaks
+      images.forEach(img => {
+        if (img.thumbnailUrl && img.thumbnailUrl.startsWith('blob:')) {
+          URL.revokeObjectURL(img.thumbnailUrl);
+        }
+        if (img.fullResUrl && img.fullResUrl.startsWith('blob:')) {
+          URL.revokeObjectURL(img.fullResUrl);
+        }
+      });
+    };
+  }, []);
+
+  // Cleanup fullResUrl for images not on current or adjacent pages
+  useEffect(() => {
+    if (images.length === 0) return;
+
+    // Keep full-res images only for current page and adjacent pages
+    const pagesToKeep = new Set([currentPage - 1, currentPage, currentPage + 1]);
+
+    setImages((prev) =>
+      prev.map((img, index) => {
+        const imagePage = Math.floor(index / imagesPerPage);
+
+        // If image is not on a page we want to keep, cleanup its fullResUrl
+        if (!pagesToKeep.has(imagePage) && img.fullResUrl) {
+          if (img.fullResUrl.startsWith('blob:')) {
+            URL.revokeObjectURL(img.fullResUrl);
+          }
+          return { ...img, fullResUrl: undefined };
+        }
+
+        return img;
+      })
+    );
+  }, [currentPage, images.length, imagesPerPage]);
 
   if (!isSupported) {
     return (
@@ -521,30 +693,27 @@ function App() {
 
             <div className="flex items-center gap-4">
               {images.length > 0 && (
-                <>
-                  <div className="text-sm text-gray-600">
-                    Page {currentPage + 1} of {totalPages} | {selectedCount} selected
-                  </div>
-                  <Button
-                    variant="outline"
-                    onClick={handleToggleGridMode}
-                  >
-                    {gridMode === '5x5' ? '5×5 Grid' : '6×4 Grid'}
-                  </Button>
-                  <Button
-                    onClick={handleExportSelected}
-                    disabled={selectedCount === 0 || isExporting}
-                  >
-                    {isExporting
-                      ? `Exporting... (${exportProgress.current}/${exportProgress.total})`
-                      : `Export Selected (${selectedCount})`
-                    }
-                  </Button>
-                </>
+                <Button
+                  variant="outline"
+                  onClick={handleToggleGridMode}
+                >
+                  {gridMode === '5x5' ? '5×5 Grid' : '6×4 Grid'}
+                </Button>
               )}
-              <Button onClick={handleSelectFolder} disabled={isLoading}>
+              <Button variant="secondary" onClick={handleSelectFolder} disabled={isLoading}>
                 {isLoading ? 'Loading...' : folderHandle ? 'Change Folder' : 'Select Folder'}
               </Button>
+              {images.length > 0 && (
+                <Button
+                  onClick={handleExportSelected}
+                  disabled={selectedCount === 0 || isExporting}
+                >
+                  {isExporting
+                    ? `Exporting... (${exportProgress.current}/${exportProgress.total})`
+                    : `Export Selected (${selectedCount})`
+                  }
+                </Button>
+              )}
             </div>
           </div>
         </div>
@@ -607,7 +776,7 @@ function App() {
               </div>
 
               <div className="text-sm text-gray-600">
-                {images.length} images total
+                Page {currentPage + 1} of {totalPages} | {selectedCount} selected | {images.length} images total
               </div>
             </div>
           </div>
